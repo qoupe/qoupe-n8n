@@ -1,0 +1,48 @@
+name: Trigger auto deployment for qoupe-ca-qoupe-n8n-dev
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ master ]
+    paths:
+    - '**'
+    - '.github/workflows/qoupe-ca-qoupe-n8n-dev-AutoDeployTrigger-1fbf6318-3c43-4238-bade-00f6f8821ec3.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:      
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions: 
+      id-token: write #This is required for requesting the OIDC JWT Token
+      contents: read #Required when GH token is used to authenticate with private repo
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.QOUPECAQOUPEN8NDEV_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.QOUPECAQOUPEN8NDEV_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.QOUPECAQOUPEN8NDEV_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          _dockerfilePathKey_: _dockerfilePath_
+          registryUrl: registry.hub.docker.com
+          registryUsername: ${{ secrets.QOUPECAQOUPEN8NDEV_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.QOUPECAQOUPEN8NDEV_REGISTRY_PASSWORD }}
+          containerAppName: qoupe-ca-qoupe-n8n-dev
+          resourceGroup: qoupe-rg-westeurope-dev
+          imageToBuild: registry.hub.docker.com/qoupe-ca-qoupe-n8n-dev:${{ github.sha }}
+          _buildArgumentsKey_: |
+            _buildArgumentsValues_
+
+
