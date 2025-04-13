@@ -3,8 +3,9 @@ import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import type { BaseLLM } from '@langchain/core/language_models/llms';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { Tool } from '@langchain/core/tools';
+import { Toolkit } from 'langchain/agents';
 import type { BaseChatMemory } from 'langchain/memory';
-import { NodeConnectionType, NodeOperationError, jsonStringify } from 'n8n-workflow';
+import { NodeConnectionTypes, NodeOperationError, jsonStringify } from 'n8n-workflow';
 import type {
 	AiEvent,
 	IDataObject,
@@ -130,7 +131,7 @@ export function getSessionId(
 		if (sessionId === '' || sessionId === undefined) {
 			throw new NodeOperationError(ctx.getNode(), 'Key parameter is empty', {
 				description:
-					"Provide a key to use as session ID in the 'Key' parameter or use the 'Take from previous node automatically' option to use the session ID from the previous node, e.t. chat trigger node",
+					"Provide a key to use as session ID in the 'Key' parameter or use the 'Connected Chat Trigger Node' option to use the session ID from your Chat Trigger",
 				itemIndex,
 			});
 		}
@@ -165,19 +166,46 @@ export function serializeChatHistory(chatHistory: BaseMessage[]): string {
 		.join('\n');
 }
 
+export function escapeSingleCurlyBrackets(text?: string): string | undefined {
+	if (text === undefined) return undefined;
+
+	let result = text;
+
+	result = result
+		// First handle triple brackets to avoid interference with double brackets
+		.replace(/(?<!{){{{(?!{)/g, '{{{{')
+		.replace(/(?<!})}}}(?!})/g, '}}}}')
+		// Then handle single brackets, but only if they're not part of double brackets
+		// Convert single { to {{ if it's not already part of {{ or {{{
+		.replace(/(?<!{){(?!{)/g, '{{')
+		// Convert single } to }} if it's not already part of }} or }}}
+		.replace(/(?<!})}(?!})/g, '}}');
+
+	return result;
+}
+
 export const getConnectedTools = async (
-	ctx: IExecuteFunctions,
+	ctx: IExecuteFunctions | IWebhookFunctions,
 	enforceUniqueNames: boolean,
 	convertStructuredTool: boolean = true,
+	escapeCurlyBrackets: boolean = false,
 ) => {
-	const connectedTools =
-		((await ctx.getInputConnectionData(NodeConnectionType.AiTool, 0)) as Tool[]) || [];
+	const connectedTools = (
+		((await ctx.getInputConnectionData(NodeConnectionTypes.AiTool, 0)) as Array<Toolkit | Tool>) ??
+		[]
+	).flatMap((toolOrToolkit) => {
+		if (toolOrToolkit instanceof Toolkit) {
+			return toolOrToolkit.getTools() as Tool[];
+		}
+
+		return toolOrToolkit;
+	});
 
 	if (!enforceUniqueNames) return connectedTools;
 
 	const seenNames = new Set<string>();
 
-	const finalTools = [];
+	const finalTools: Tool[] = [];
 
 	for (const tool of connectedTools) {
 		const { name } = tool;
@@ -189,6 +217,10 @@ export const getConnectedTools = async (
 		}
 		seenNames.add(name);
 
+		if (escapeCurlyBrackets) {
+			tool.description = escapeSingleCurlyBrackets(tool.description) ?? tool.description;
+		}
+
 		if (convertStructuredTool && tool instanceof N8nTool) {
 			finalTools.push(tool.asDynamicTool());
 		} else {
@@ -198,3 +230,22 @@ export const getConnectedTools = async (
 
 	return finalTools;
 };
+
+/**
+ * Sometimes model output is wrapped in an additional object property.
+ * This function unwraps the output if it is in the format { output: { output: { ... } } }
+ */
+export function unwrapNestedOutput(output: Record<string, unknown>): Record<string, unknown> {
+	if (
+		'output' in output &&
+		Object.keys(output).length === 1 &&
+		typeof output.output === 'object' &&
+		output.output !== null &&
+		'output' in output.output &&
+		Object.keys(output.output).length === 1
+	) {
+		return output.output as Record<string, unknown>;
+	}
+
+	return output;
+}
